@@ -12,7 +12,7 @@ import com.bhm.ble.callback.BleScanCallback
 import com.bhm.ble.data.BleConnectFailType
 import com.bhm.ble.data.BleScanFailType
 import com.bhm.ble.device.BleDevice
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import com.bhm.ble.utils.BleUtil
 import com.bhm.demo.BaseActivity
 import com.bhm.demo.constants.LOCATION_PERMISSION
@@ -64,8 +64,14 @@ class MainViewModel(private val application: Application) : BaseViewModel(applic
 //                .setMtu(100, true)
                 .setMaxConnectNum(2)
                 .setConnectRetryCountAndInterval(2, 1000)
+                .setStopScanWhenStartConnect(false)
                 .build()
         )
+        BleManager.get().registerBluetoothStateReceiver {
+            onStateOff {
+                refreshMutableStateFlow.value = RefreshBleDevice(null, System.currentTimeMillis())
+            }
+        }
     }
 
     /**
@@ -82,10 +88,18 @@ class MainViewModel(private val application: Application) : BaseViewModel(applic
                 LOCATION_PERMISSION,
                 {
                     BleLogger.d("获取到了权限")
-                    continuation.resume(true)
+                    try {
+                        continuation.resume(true)
+                    } catch (e: Exception) {
+                        BleLogger.e(e.message)
+                    }
                 }, {
                     BleLogger.w("缺少定位权限")
-                    continuation.resume(false)
+                    try {
+                        continuation.resume(false)
+                    } catch (e: Exception) {
+                        BleLogger.e(e.message)
+                    }
                 }
             )
         }
@@ -98,7 +112,11 @@ class MainViewModel(private val application: Application) : BaseViewModel(applic
                 ) { _, _ ->
                     val enable = BleUtil.isGpsOpen(application)
                     BleLogger.i("是否打开了GPS: $enable")
-                    it.resume(enable)
+                    try {
+                        it.resume(enable)
+                    } catch (e: Exception) {
+                        BleLogger.e(e.message)
+                    }
                 }
             }
         }
@@ -113,7 +131,11 @@ class MainViewModel(private val application: Application) : BaseViewModel(applic
                         delay(1000)
                         val enable = BleManager.get().isBleEnable()
                         BleLogger.i("是否打开了蓝牙: $enable")
-                        it.resume(enable)
+                        try {
+                            it.resume(enable)
+                        } catch (e: Exception) {
+                            BleLogger.e(e.message)
+                        }
                     }
                 }
             }
@@ -217,6 +239,7 @@ class MainViewModel(private val application: Application) : BaseViewModel(applic
             val hasScanPermission = hasScanPermission(activity)
             if (hasScanPermission) {
                 BleManager.get().startScanAndConnect(
+                    false,
                     getScanCallback(false),
                     connectCallback
                 )
@@ -229,7 +252,7 @@ class MainViewModel(private val application: Application) : BaseViewModel(applic
      */
     fun connect(bleDevice: BleDevice?) {
         bleDevice?.let { device ->
-            BleManager.get().connect(device, connectCallback)
+            BleManager.get().connect(device, false, connectCallback)
         }
     }
 

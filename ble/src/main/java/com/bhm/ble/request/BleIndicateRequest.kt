@@ -20,7 +20,7 @@ import com.bhm.ble.data.Constants.INDICATE_TASK_ID
 import com.bhm.ble.data.Constants.UUID_CLIENT_CHARACTERISTIC_CONFIG_DESCRIPTOR
 import com.bhm.ble.device.BleDevice
 import com.bhm.ble.request.base.BleTaskQueueRequest
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import com.bhm.ble.utils.BleUtil
 import kotlinx.coroutines.TimeoutCancellationException
 import java.util.*
@@ -43,19 +43,16 @@ internal class BleIndicateRequest(
     private val bleIndicateCallbackHashMap:
             ConcurrentHashMap<String, BleIndicateCallback> = ConcurrentHashMap()
 
-    @Synchronized
     private fun addIndicateCallback(uuid: String, bleIndicateCallback: BleIndicateCallback) {
         bleIndicateCallbackHashMap[uuid] = bleIndicateCallback
     }
 
-    @Synchronized
     fun removeIndicateCallback(uuid: String?) {
         if (bleIndicateCallbackHashMap.containsKey(uuid)) {
             bleIndicateCallbackHashMap.remove(uuid)
         }
     }
 
-    @Synchronized
     fun removeAllIndicateCallback() {
         bleIndicateCallbackHashMap.clear()
     }
@@ -63,13 +60,12 @@ internal class BleIndicateRequest(
     /**
      * indicate
      */
-    @Synchronized
     fun enableCharacteristicIndicate(serviceUUID: String,
                                      indicateUUID: String,
                                      bleDescriptorGetType: BleDescriptorGetType,
                                      bleIndicateCallback: BleIndicateCallback) {
         if (!BleUtil.isPermission(getBleManager().getContext())) {
-            bleIndicateCallback.callIndicateFail(NoBlePermissionException())
+            bleIndicateCallback.callIndicateFail(bleDevice, indicateUUID, NoBlePermissionException())
             return
         }
         val characteristic = getCharacteristic(bleDevice, serviceUUID, indicateUUID)
@@ -94,7 +90,11 @@ internal class BleIndicateRequest(
                     }
                 },
                 interrupt = { _, throwable ->
-                    mContinuation?.resume(throwable)
+                    try {
+                        mContinuation?.resume(throwable)
+                    } catch (e: Exception) {
+                        BleLogger.e(e.message)
+                    }
                 },
                 callback = { _, throwable ->
                     throwable?.let {
@@ -102,7 +102,7 @@ internal class BleIndicateRequest(
                         if (it is TimeoutCancellationException || it is TimeoutCancelException) {
                             val exception = TimeoutCancelException("$indicateUUID -> 设置Indicate失败，设置超时")
                             BleLogger.e(exception.message)
-                            bleIndicateCallback.callIndicateFail(exception)
+                            bleIndicateCallback.callIndicateFail(bleDevice, indicateUUID, exception)
                         }
                     }
                 }
@@ -111,14 +111,13 @@ internal class BleIndicateRequest(
         } else {
             val exception = UnSupportException("$indicateUUID -> 设置Indicate失败，此特性不支持通知")
             BleLogger.e(exception.message)
-            bleIndicateCallback.callIndicateFail(exception)
+            bleIndicateCallback.callIndicateFail(bleDevice, indicateUUID, exception)
         }
     }
 
     /**
      * stop indicate
      */
-    @Synchronized
     fun disableCharacteristicIndicate(serviceUUID: String,
                                       indicateUUID: String,
                                       bleDescriptorGetType: BleDescriptorGetType): Boolean {
@@ -156,7 +155,7 @@ internal class BleIndicateRequest(
                 "收到Indicate数据：${BleUtil.bytesToHex(value)}")
         bleIndicateCallbackHashMap.values.forEach {
             if (characteristic.uuid?.toString().equals(it.getKey(), ignoreCase = true)) {
-                it.callCharacteristicChanged(value)
+                it.callCharacteristicChanged(bleDevice, it.getKey().toString(), value)
             }
         }
     }
@@ -172,15 +171,15 @@ internal class BleIndicateRequest(
             if (descriptor?.characteristic?.uuid.toString().equals(it.getKey(), ignoreCase = true)
                 && cancelIndicateJob(it.getKey(), getTaskId(it.getKey()))) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    BleLogger.d("${it.getKey()} -> 设置Indicate成功")
-                    it.callIndicateSuccess()
+                    BleLogger.i("${it.getKey()} -> 设置Indicate成功")
+                    it.callIndicateSuccess(bleDevice, it.getKey().toString())
                 } else {
                     val exception = UnDefinedException(
                         "${it.getKey()} -> 设置Indicate失败，Descriptor写数据失败",
                         EXCEPTION_CODE_DESCRIPTOR_FAIL
                     )
                     BleLogger.e(exception.message)
-                    it.callIndicateFail(exception)
+                    it.callIndicateFail(bleDevice, it.getKey().toString(), exception)
                 }
             }
         }
@@ -204,7 +203,7 @@ internal class BleIndicateRequest(
             )
             cancelIndicateJob(indicateUUID, getTaskId(indicateUUID))
             BleLogger.e(exception.message)
-            bleIndicateCallback?.callIndicateFail(exception)
+            bleIndicateCallback?.callIndicateFail(bleDevice, indicateUUID, exception)
             return false
         }
         val descriptorList = characteristic.descriptors
@@ -227,7 +226,7 @@ internal class BleIndicateRequest(
                 )
                 cancelIndicateJob(indicateUUID, getTaskId(indicateUUID))
                 BleLogger.e(exception.message)
-                bleIndicateCallback?.callIndicateFail(exception)
+                bleIndicateCallback?.callIndicateFail(bleDevice, indicateUUID, exception)
                 return false
             }
             return true
@@ -244,7 +243,7 @@ internal class BleIndicateRequest(
                 )
                 cancelIndicateJob(indicateUUID, getTaskId(indicateUUID))
                 BleLogger.e(exception.message)
-                bleIndicateCallback?.callIndicateFail(exception)
+                bleIndicateCallback?.callIndicateFail(bleDevice, indicateUUID, exception)
                 return false
             }
             val writeDescriptorCode = writeDescriptor(bluetoothGatt, descriptor, enable)
@@ -265,7 +264,7 @@ internal class BleIndicateRequest(
                 )
                 cancelIndicateJob(indicateUUID, getTaskId(indicateUUID))
                 BleLogger.e(exception.message)
-                bleIndicateCallback?.callIndicateFail(exception)
+                bleIndicateCallback?.callIndicateFail(bleDevice, indicateUUID, exception)
                 return false
             }
         }

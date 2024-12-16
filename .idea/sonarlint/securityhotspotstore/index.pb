@@ -1,8 +1,6 @@
 
 ;
 gradlew.bat,2\a\2a45a911a8f1836b0b6c5b758962572012d8f8c3
-`
-0ble/src/main/java/com/bhm/ble/utils/BleLogger.kt,2\5\25729a01e5d15eccadbbcd1b0429ace7c42ef17f
 b
 2ble/src/main/java/com/bhm/ble/data/BleWriteData.kt,c\f\cf9aed2c656c91aa9de601f3ae337157d8fd2561
 e
@@ -111,3 +109,35 @@ n
 >app/src/main/java/com/bhm/demo/adapter/DetailsExpandAdapter.kt,7\9\791a276597d6c3f24ab3cf34d14c29642101baf7
 @
 app/build.gradle,f\4\f4a01d6a4fcb971362ec00a83903fd3902f52164
+^
+.ble/src/main/java/com/bhm/ble/utils/BleUtil.kt,5\4\54c7e934d1de2c5951d7e1da694b22a7adf9a75c
+j
+:app/src/main/java/com/bhm/demo/ui/OptionSettingActivity.kt,d\b\dbed5b4c83a4706eec4eb77df94622b7fe182d1f
+a
+1app/src/main/java/com/bhm/demo/ui/MainActivity.kt,9\a\9a9be1cad9854fa4730b6c085c26fd391e9a3c1d
+i
+9ble/src/main/java/com/bhm/ble/callback/BleScanCallback.kt,9\8\98dfac73ee990ea32c6f0e079bac322ca75f903a
+g
+7ble/src/main/java/com/bhm/ble/request/BleReadRequest.kt,f\2\f25afbb4385061bdb9965342e5eb4474aa843ff6
+e
+5ble/src/main/java/com/bhm/ble/attribute/BleOptions.kt,7\f\7f1de9718fce9bf5136d83e81cb0501d55a9b34b
+k
+;ble/src/main/java/com/bhm/ble/receiver/BluetoothReceiver.kt,2\b\2b01a856cb025e04658b988ce2fa81c12a055016
+k
+;ble/src/main/java/com/bhm/ble/callback/BluetoothCallback.kt,f\7\f73c6e413c34b7a4b7a45e17bdd0c92ea7c77578
+D
+support/build.gradle,b\7\b70e40198d92273afe90dbf870db20f9c082ee25
+q
+Asupport/src/main/java/com/bhm/support/sdk/common/BaseViewModel.kt,6\6\66fb75e3afe8084b862b0b26998bcc18c0600b89
+n
+>ble/src/main/java/com/bhm/ble/request/BleSetPriorityRequest.kt,1\d\1d21d7aa3b22a5f8b40c4be46c5d310d75562fd7
+^
+.ble/src/main/java/com/bhm/ble/log/BleLogger.kt,1\e\1e2d5ebd9447c17b9778114080190c9b23b79a23
+`
+0ble/src/main/java/com/bhm/ble/log/BleLogEvent.kt,c\d\cdb698f98530e0be077261ebfc620282f8208650
+`
+0ble/src/main/java/com/bhm/ble/log/BleLogLevel.kt,3\1\31467d3bc83448372f072cec2148f35e8d6313af
+b
+2ble/src/main/java/com/bhm/ble/log/BleLogManager.kt,d\6\d62ac304742af6f279e8038f39f93e3d80eae305
+g
+7ble/src/main/java/com/bhm/ble/data/BleWriteQueueData.kt,b\0\b0ba7085629b0df3cde543978d2d8857d0a78420

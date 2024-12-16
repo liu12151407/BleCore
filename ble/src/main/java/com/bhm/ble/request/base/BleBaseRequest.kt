@@ -23,7 +23,12 @@ internal interface BleBaseRequest {
     /**
      * 开始扫描
      */
-    fun startScan(bleScanCallback: BleScanCallback.() -> Unit)
+    fun startScan(
+        scanMillisTimeOut: Long?,
+        scanRetryCount: Int?,
+        scanRetryInterval: Long?,
+        bleScanCallback: BleScanCallback.() -> Unit
+    )
 
     /**
      * 是否扫描中
@@ -38,19 +43,35 @@ internal interface BleBaseRequest {
     /**
      * 扫描并连接，如果扫描到多个设备，则会连接第一个
      */
-    fun startScanAndConnect(bleScanCallback: BleScanCallback.() -> Unit,
+    fun startScanAndConnect(scanMillisTimeOut: Long?,
+                            scanRetryCount: Int?,
+                            scanRetryInterval: Long?,
+                            connectMillisTimeOut: Long?,
+                            connectRetryCount: Int?,
+                            connectRetryInterval: Long?,
+                            isForceConnect: Boolean = false,
+                            bleScanCallback: BleScanCallback.() -> Unit,
                             bleConnectCallback: BleConnectCallback.() -> Unit)
 
     /**
      * 开始连接
      */
     fun connect(bleDevice: BleDevice,
+                connectMillisTimeOut: Long?,
+                connectRetryCount: Int?,
+                connectRetryInterval: Long?,
+                isForceConnect: Boolean = false,
                 bleConnectCallback: BleConnectCallback.() -> Unit)
 
     /**
      * 断开连接
      */
     fun disConnect(bleDevice: BleDevice)
+
+    /**
+     * 取消/停止连接
+     */
+    fun stopConnect(bleDevice: BleDevice)
 
     /**
      * 是否已连接
@@ -133,7 +154,25 @@ internal interface BleBaseRequest {
                   serviceUUID: String,
                   writeUUID: String,
                   dataArray: SparseArray<ByteArray>,
+                  writeType: Int? = null,
                   bleWriteCallback: BleWriteCallback.() -> Unit)
+
+    /**
+     * 放入一个写队列，写成功，则从队列中取下一个数据，写失败，则重试[retryWriteCount]次
+     * 与[writeData]的区别在于，[writeData]写成功，则从队列中取下一个数据，写失败，则不再继续写后面的数据
+     *
+     * @param skipErrorPacketData 是否跳过数据长度为0的数据包
+     * @param retryWriteCount 写失败后重试的次数
+     */
+    fun writeQueueData(bleDevice: BleDevice,
+                       serviceUUID: String,
+                       writeUUID: String,
+                       dataArray: SparseArray<ByteArray>,
+                       skipErrorPacketData: Boolean = false,
+                       retryWriteCount: Int = 0,
+                       retryDelayTime: Long = 0L,
+                       writeType: Int? = null,
+                       bleWriteCallback: BleWriteCallback.() -> Unit)
 
     /**
      * 获取所有已连接设备集合
@@ -195,6 +234,11 @@ internal interface BleBaseRequest {
     fun removeAllCharacterCallback(bleDevice: BleDevice)
 
     /**
+     * 移除该设备Event回调
+     */
+    fun removeBleEventCallback(bleDevice: BleDevice)
+
+    /**
      * 断开所有设备的连接
      */
     fun disConnectAll()
@@ -203,6 +247,16 @@ internal interface BleBaseRequest {
      * 移除该设备的Scan回调
      */
     fun removeBleScanCallback()
+
+    /**
+     * 注册系统蓝牙广播
+     */
+    fun registerBluetoothStateReceiver(bluetoothCallback: BluetoothCallback.() -> Unit)
+
+    /**
+     * 取消注册系统蓝牙广播
+     */
+    fun unRegisterBluetoothStateReceiver()
 
     /**
      * 断开某个设备的连接 释放资源

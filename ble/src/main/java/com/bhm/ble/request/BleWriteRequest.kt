@@ -13,17 +13,31 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.os.Build
 import android.util.SparseArray
 import com.bhm.ble.callback.BleWriteCallback
-import com.bhm.ble.data.*
+import com.bhm.ble.data.BleWriteData
+import com.bhm.ble.data.BleWriteQueueData
 import com.bhm.ble.data.Constants.DEFAULT_MTU
 import com.bhm.ble.data.Constants.WRITE_TASK_ID
+import com.bhm.ble.data.NoBlePermissionException
+import com.bhm.ble.data.TimeoutCancelException
+import com.bhm.ble.data.UnDefinedException
+import com.bhm.ble.data.UnSupportException
 import com.bhm.ble.device.BleDevice
+import com.bhm.ble.log.BleLogger
 import com.bhm.ble.request.base.BleTaskQueueRequest
-import com.bhm.ble.utils.BleLogger
 import com.bhm.ble.utils.BleUtil
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import java.util.*
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.Collections
+import java.util.LinkedList
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -42,7 +56,33 @@ internal class BleWriteRequest(
     private val bleWriteDataHashMap:
             ConcurrentHashMap<String, MutableList<BleWriteData>> = ConcurrentHashMap()
 
-    @Synchronized
+    /**
+     * 写数据队列。写成功才写下一包。Ble库目前没有这样处理
+     */
+    private val linkedBlockingQueue = LinkedBlockingQueue<BleWriteQueueData>()
+
+    /**
+     * 写数据临时队列
+     */
+    private val linkedBlockingTempQueue = LinkedBlockingQueue<BleWriteQueueData>()
+
+    /**
+     * 添加任务线程
+     */
+    private val addWriteJobScope = CoroutineScope(Dispatchers.IO)
+
+    /**
+     * 写队列线程
+     */
+    private val writeJobScope = CoroutineScope(Dispatchers.IO)
+
+    /**
+     * 当前重写次数
+     */
+    private var currentRetryWriteCount = AtomicInteger(0)
+
+    private val characters = ('a'..'z') + ('A'..'Z') + ('0'..'9')
+
     private fun addBleWriteData(uuid: String, bleWriteData: BleWriteData) {
         if (bleWriteDataHashMap.containsKey(uuid) && bleWriteDataHashMap[uuid] != null) {
             bleWriteDataHashMap[uuid]?.add(bleWriteData)
@@ -53,7 +93,6 @@ internal class BleWriteRequest(
         }
     }
 
-    @Synchronized
     fun removeWriteCallback(uuid: String?, bleWriteCallback: BleWriteCallback? = null) {
         if (bleWriteDataHashMap.containsKey(uuid)) {
             if (bleWriteCallback != null) {
@@ -73,20 +112,73 @@ internal class BleWriteRequest(
         }
     }
 
-    @Synchronized
     fun removeAllWriteCallback() {
         bleWriteDataHashMap.clear()
     }
 
-    @Synchronized
-    fun writeData(serviceUUID: String,
-                  writeUUID: String,
-                  operateRandomID: String,
-                  dataArray: SparseArray<ByteArray>,
-                  bleWriteCallback: BleWriteCallback) {
+    /**
+     * 放入一个写队列，写成功，则从队列中取下一个数据，写失败，则重试[retryWriteCount]次
+     *  与[writeData]的区别在于，[writeData]写成功，则从队列中取下一个数据，写失败，则不再继续写后面的数据
+     */
+    fun writeQueueData(
+        serviceUUID: String,
+        writeUUID: String,
+        operateRandomID: String,
+        dataArray: SparseArray<ByteArray>,
+        skipErrorPacketData: Boolean = false,
+        retryWriteCount: Int = 0,
+        retryDelayTime: Long = 0L,
+        writeType: Int?,
+        bleWriteCallback: BleWriteCallback
+    ) {
         if (!BleUtil.isPermission(getBleManager().getContext())) {
-            bleWriteCallback.callWriteFail(0, dataArray.size(), NoBlePermissionException())
-            bleWriteCallback.callWriteComplete(false)
+            bleWriteCallback.callWriteFail(bleDevice, 0, dataArray.size(), NoBlePermissionException())
+            bleWriteCallback.callWriteComplete(bleDevice, false)
+            return
+        }
+        val randomStr =  generateRandomString()
+        if (dataArray.size() == 0) {
+            val exception = UnDefinedException(
+                getTaskId(writeUUID, operateRandomID + randomStr, 0) + " -> 写数据失败，数据为空"
+            )
+            BleLogger.e(exception.message)
+            bleWriteCallback.callWriteFail(bleDevice, 0, 0, exception)
+            bleWriteCallback.callWriteComplete(bleDevice, false)
+            return
+        }
+        addWriteJobScope.launch {
+            for (i in 0 until dataArray.size()) {
+                val data = dataArray.valueAt(i)
+                linkedBlockingTempQueue.put(
+                    BleWriteQueueData(
+                        operateRandomID = operateRandomID + randomStr,
+                        serviceUUID = serviceUUID,
+                        writeUUID = writeUUID,
+                        data = data,
+                        skipErrorPacketData = skipErrorPacketData,
+                        retryWriteCount = retryWriteCount,
+                        retryDelayTime = retryDelayTime,
+                        writeType = writeType,
+                    )
+                )
+            }
+            if (getWriteDataFromTemp()) {
+                startWriteQueueJob(bleWriteCallback)
+            }
+        }
+    }
+
+    fun writeData(
+        serviceUUID: String,
+        writeUUID: String,
+        operateRandomID: String,
+        dataArray: SparseArray<ByteArray>,
+        writeType: Int?,
+        bleWriteCallback: BleWriteCallback
+    ) {
+        if (!BleUtil.isPermission(getBleManager().getContext())) {
+            bleWriteCallback.callWriteFail(bleDevice, 0, dataArray.size(), NoBlePermissionException())
+            bleWriteCallback.callWriteComplete(bleDevice, false)
             return
         }
         if (dataArray.size() == 0) {
@@ -94,8 +186,8 @@ internal class BleWriteRequest(
                 getTaskId(writeUUID, operateRandomID, 0) + " -> 写数据失败，数据为空"
             )
             BleLogger.e(exception.message)
-            bleWriteCallback.callWriteFail(0, 0, exception)
-            bleWriteCallback.callWriteComplete(false)
+            bleWriteCallback.callWriteFail(bleDevice, 0, 0, exception)
+            bleWriteCallback.callWriteComplete(bleDevice, false)
             return
         }
         for (i in 0 until dataArray.size()) {
@@ -106,8 +198,8 @@ internal class BleWriteRequest(
                             " -> 写数据失败，第${i + 1}个数据包为空"
                 )
                 BleLogger.e(exception.message)
-                bleWriteCallback.callWriteFail(i + 1, dataArray.size(), exception)
-                bleWriteCallback.callWriteComplete(false)
+                bleWriteCallback.callWriteFail(bleDevice, i + 1, dataArray.size(), exception)
+                bleWriteCallback.callWriteComplete(bleDevice, false)
                 return
             }
             val mtu = getBleOptions()?.mtu?: DEFAULT_MTU
@@ -118,8 +210,8 @@ internal class BleWriteRequest(
                     , i + 1)} -> " + "写数据失败，第${i + 1}个数据包" +
                         "长度(${data.size}) + 3大于设定Mtu($mtu)")
                 BleLogger.e(exception.message)
-                bleWriteCallback.callWriteFail(i + 1, dataArray.size(), exception)
-                bleWriteCallback.callWriteComplete(false)
+                bleWriteCallback.callWriteFail(bleDevice, i + 1, dataArray.size(), exception)
+                bleWriteCallback.callWriteComplete(bleDevice, false)
                 return
             }
         }
@@ -133,35 +225,42 @@ internal class BleWriteRequest(
             //循环数据包，生成对应的任务
             for (i in 0 until dataArray.size()) {
                 val bleWriteData = BleWriteData(
-                    operateRandomID = operateRandomID,
+                    operateRandomID = operateRandomID + generateRandomString(),
                     serviceUUID = serviceUUID,
                     writeUUID = writeUUID,
                     currentPackage = i + 1,
                     totalPackage = dataArray.size(),
                     data = dataArray.valueAt(i),
                     isWriting = AtomicBoolean(false),
-                    bleWriteCallback = bleWriteCallback
+                    bleWriteCallback = bleWriteCallback,
+                    writeType = writeType
                 )
                 addBleWriteData(writeUUID, bleWriteData)
                 startWriteJob(
                     characteristic,
+                    (getTaskQueue(bleWriteData.writeUUID)?.getTaskList()?.size()?: 0) + i + 1,
                     bleWriteData
                 )
             }
         } else {
             val exception = UnSupportException("$writeUUID -> 写数据失败，此特性不支持写数据")
             BleLogger.e(exception.message)
-            bleWriteCallback.callWriteFail(0, dataArray.size(), exception)
-            bleWriteCallback.callWriteComplete(false)
+            bleWriteCallback.callWriteFail(bleDevice, 0, dataArray.size(), exception)
+            bleWriteCallback.callWriteComplete(bleDevice, false)
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun startWriteJob(characteristic: BluetoothGattCharacteristic,
-                              bleWriteData: BleWriteData) {
+    private fun startWriteJob(
+        characteristic: BluetoothGattCharacteristic,
+        index: Int,
+        bleWriteData: BleWriteData
+    ) {
+        BleLogger.e("生成的operateRandomID: ${bleWriteData.operateRandomID}")
         var mContinuation: Continuation<Throwable?>? = null
         val task = getTask(
             getTaskId(bleWriteData.writeUUID, bleWriteData.operateRandomID, bleWriteData.currentPackage),
+            getOperateTime() * index,
             block = {
                 suspendCoroutine<Throwable?> { continuation ->
                     mContinuation = continuation
@@ -170,7 +269,15 @@ internal class BleWriteRequest(
                 }
             },
             interrupt = { _, throwable ->
-                mContinuation?.resume(throwable)
+                try {
+                    try {
+                        mContinuation?.resume(throwable)
+                    } catch (e: Exception) {
+                        BleLogger.e(e.message)
+                    }
+                } catch (e: Exception) {
+                    BleLogger.e(e.message)
+                }
             },
             callback = { _, throwable ->
                 throwable?.let {
@@ -181,15 +288,6 @@ internal class BleWriteRequest(
                             getTaskId(bleWriteData.writeUUID, bleWriteData.operateRandomID,
                                 bleWriteData.currentPackage) + " -> " +
                                     "第${bleWriteData.currentPackage}包数据写失败，超时")
-                        BleLogger.e(exception.message)
-                        bleWriteData.bleWriteCallback.callWriteFail(
-                            bleWriteData.currentPackage,
-                            bleWriteData.totalPackage,
-                            exception
-                        )
-                        if (bleWriteData.currentPackage == bleWriteData.totalPackage) {
-                            bleWriteData.bleWriteCallback.callWriteComplete(false)
-                        }
                         //移除监听
                         for ((key, value) in bleWriteDataHashMap) {
                             if (!bleWriteData.writeUUID.equals(key, ignoreCase = true)) {
@@ -205,11 +303,97 @@ internal class BleWriteRequest(
                                 }
                             }
                         }
+                        BleLogger.e(exception.message)
+                        bleWriteData.bleWriteCallback.callWriteFail(
+                            bleDevice,
+                            bleWriteData.currentPackage,
+                            bleWriteData.totalPackage,
+                            exception
+                        )
+                        //某个数据包写超时，后面的包不需再写
+                        cancelSameWriteJob(bleWriteData)
+//                        if (bleWriteData.currentPackage == bleWriteData.totalPackage) {
+//                            bleWriteData.bleWriteCallback.callWriteComplete(bleDevice, false)
+//                        }
                     }
                 }
             }
         )
         getTaskQueue(bleWriteData.writeUUID)?.addTask(task)
+    }
+
+    private fun startWriteQueueJob(
+        bleWriteCallback: BleWriteCallback
+    ) {
+        writeJobScope.launch {
+            //写数据间隔，写太快会导致设备忙碌而失败率高
+            delay(getOperateInterval())
+            val currentWriteData = linkedBlockingQueue.peek()
+            //如果这个数据包是空的，同时skipErrorPacketData为true，则跳过这个数据包，写下一个数据包
+            if (currentWriteData != null && currentWriteData.data.isEmpty() && currentWriteData.skipErrorPacketData) {
+                linkedBlockingQueue.poll()
+                if (linkedBlockingQueue.isNotEmpty() || getWriteDataFromTemp()) {
+                    startWriteQueueJob(bleWriteCallback)
+                }
+                return@launch
+            }
+            currentWriteData?.let { data ->
+                writeData(
+                    data.serviceUUID,
+                    data.writeUUID,
+                    data.operateRandomID,
+                    SparseArray<ByteArray>(1).apply {
+                        put(0, data.data)
+                    },
+                    data.writeType,
+                    object : BleWriteCallback() {
+                        override fun callWriteFail(
+                            bleDevice: BleDevice,
+                            current: Int,
+                            total: Int,
+                            throwable: Throwable
+                        ) {
+                            super.callWriteFail(bleDevice, current, total, throwable)
+                            bleWriteCallback.callWriteFail(bleDevice, current, total, throwable)
+                            launchInIOThread {
+                                currentRetryWriteCount.set(currentRetryWriteCount.get() + 1)
+                                val isCancelRetry = currentRetryWriteCount.get() > data.retryWriteCount
+                                BleLogger.e("写失败，指定重试${data.retryWriteCount}次，是否进入下一次重试：${!isCancelRetry}")
+                                if (isCancelRetry) {
+                                    //如果重试了retryWriteCount次还是失败，则丢掉此包，写下一包
+                                    currentRetryWriteCount.set(0)
+                                    if (linkedBlockingQueue.isNotEmpty()) {
+                                        linkedBlockingQueue.poll()
+                                    }
+                                }
+//                                delay(200L + (max(currentRetryWriteCount.get(), 1) - 1)* 1000)
+                                delay(data.retryDelayTime)
+                                if (linkedBlockingQueue.isNotEmpty() || getWriteDataFromTemp()) {
+                                    startWriteQueueJob(bleWriteCallback)
+                                }
+                            }
+                        }
+
+                        override fun callWriteSuccess(
+                            bleDevice: BleDevice,
+                            current: Int,
+                            total: Int,
+                            justWrite: ByteArray
+                        ) {
+                            super.callWriteSuccess(bleDevice, current, total, justWrite)
+                            bleWriteCallback.callWriteSuccess(bleDevice, current, total, justWrite)
+                            currentRetryWriteCount.set(0)
+                            if (linkedBlockingQueue.isNotEmpty()) {
+                                linkedBlockingQueue.poll()
+                            }
+                            if (linkedBlockingQueue.isNotEmpty() || getWriteDataFromTemp()) {
+                                startWriteQueueJob(bleWriteCallback)
+                            }
+                        }
+                    }
+                )
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -225,8 +409,16 @@ internal class BleWriteRequest(
 //            delay(500)
 //            onCharacteristicWrite(characteristic, BluetoothGatt.GATT_SUCCESS)
 //        }
+        //当支持WRITE_NO_RESPONSE和PROPERTY_WRITE时，用户可以指定写类型
+        //否则如果支持WRITE_NO_RESPONSE，则使用WRITE_TYPE_NO_RESPONSE，否则使用WRITE_TYPE_DEFAULT
         val writeType =
             if (characteristic.properties and
+                BluetoothGattCharacteristic.PROPERTY_WRITE != 0 &&
+                characteristic.properties and
+                BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0 &&
+                bleWriteData.writeType != null) {
+                bleWriteData.writeType!!
+            } else if (characteristic.properties and
                 BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) {
                 BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             } else {
@@ -263,6 +455,7 @@ internal class BleWriteRequest(
                     "失败，错误可能是没有权限、未连接、服务未绑定、不可写、请求忙碌等，code = $errorCode")
             BleLogger.e(exception.message)
             bleWriteData.bleWriteCallback.callWriteFail(
+                bleDevice,
                 bleWriteData.currentPackage,
                 bleWriteData.totalPackage,
                 exception
@@ -297,19 +490,20 @@ internal class BleWriteRequest(
                     )
                     bleWriteData.isWriting = AtomicBoolean(false)
                     if (status == BluetoothGatt.GATT_SUCCESS) {
-                        BleLogger.d(
+                        BleLogger.i(
                             "$taskId -> 第${bleWriteData.currentPackage}包" +
                                     "数据写成功：" + BleUtil.bytesToHex(bleWriteData.data)
                         )
                         cancelWriteJob(bleWriteData.writeUUID, taskId)
 
                         bleWriteData.bleWriteCallback.callWriteSuccess(
+                            bleDevice,
                             bleWriteData.currentPackage,
                             bleWriteData.totalPackage,
                             bleWriteData.data
                         )
                         if (bleWriteData.currentPackage == bleWriteData.totalPackage) {
-                            bleWriteData.bleWriteCallback.callWriteComplete(true)
+                            bleWriteData.bleWriteCallback.callWriteComplete(bleDevice, true)
                             iterator.remove()
                         }
                     } else {
@@ -319,6 +513,7 @@ internal class BleWriteRequest(
                         )
                         BleLogger.e(exception.message)
                         bleWriteData.bleWriteCallback.callWriteFail(
+                            bleDevice,
                             bleWriteData.currentPackage,
                             bleWriteData.totalPackage,
                             exception
@@ -351,13 +546,13 @@ internal class BleWriteRequest(
             val taskId = getTaskId(bleWriteData.writeUUID, bleWriteData.operateRandomID
                 , bleWriteData.currentPackage)
             cancelWriteJob(bleWriteData.writeUUID, taskId)
-            bleWriteData.bleWriteCallback.callWriteComplete(false)
+            bleWriteData.bleWriteCallback.callWriteComplete(bleDevice, false)
         } else {
             for (i in currentPackage..totalPackage) {
                 val id = getTaskId(bleWriteData.writeUUID, bleWriteData.operateRandomID, i)
                 cancelWriteJob(bleWriteData.writeUUID, id)
                 if (i == totalPackage) {
-                    bleWriteData.bleWriteCallback.callWriteComplete(false)
+                    bleWriteData.bleWriteCallback.callWriteComplete(bleDevice, false)
                 }
             }
         }
@@ -366,13 +561,38 @@ internal class BleWriteRequest(
     /**
      * 取消写数据任务
      */
-    @Synchronized
     private fun cancelWriteJob(writeUUID: String?, taskId: String) {
         getTaskQueue(writeUUID?: "")?.removeTask(taskId)
+    }
+
+    /**
+     * 从临时队列中获取数据
+     */
+    private fun getWriteDataFromTemp(): Boolean {
+        if (linkedBlockingQueue.isEmpty() && linkedBlockingTempQueue.isNotEmpty()) {
+            linkedBlockingQueue.addAll(linkedBlockingTempQueue)
+            linkedBlockingTempQueue.clear()
+            return true
+        }
+        return false
+    }
+
+    /**
+     * 从[characters]中随机生成3个字符组成的字符串
+     */
+    private fun generateRandomString(): String {
+        return (1..3)
+            .map { characters.random() }
+            .joinToString("")
     }
 
     override fun close() {
         super.close()
         removeAllWriteCallback()
+        currentRetryWriteCount.set(0)
+        addWriteJobScope.cancel()
+        writeJobScope.cancel()
+        linkedBlockingQueue.clear()
+        linkedBlockingTempQueue.clear()
     }
 }

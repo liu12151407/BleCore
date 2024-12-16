@@ -17,7 +17,7 @@ import com.bhm.ble.data.TimeoutCancelException
 import com.bhm.ble.data.UnDefinedException
 import com.bhm.ble.device.BleDevice
 import com.bhm.ble.request.base.Request
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import com.bhm.ble.utils.BleUtil
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlin.coroutines.Continuation
@@ -37,14 +37,12 @@ internal class BleRssiRequest(
 
     private var bleRssiCallback: BleRssiCallback? = null
 
-    private val bleTaskQueue: BleTaskQueue = BleTaskQueue("Rssi队列")
+    private val bleTaskQueue: BleTaskQueue = BleTaskQueue("${bleDevice.deviceAddress}Rssi队列")
 
-    @Synchronized
     private fun addRssiCallback(callback: BleRssiCallback) {
         bleRssiCallback = callback
     }
 
-    @Synchronized
     fun removeRssiCallback() {
         bleRssiCallback = null
     }
@@ -53,10 +51,9 @@ internal class BleRssiRequest(
      * 读取信号值
      */
     @SuppressLint("MissingPermission")
-    @Synchronized
     fun readRemoteRssi(bleRssiCallback: BleRssiCallback) {
         if (!BleUtil.isPermission(getBleManager().getContext())) {
-            bleRssiCallback.callRssiFail(NoBlePermissionException())
+            bleRssiCallback.callRssiFail(bleDevice, NoBlePermissionException())
             return
         }
         cancelReadRssiJob()
@@ -68,19 +65,27 @@ internal class BleRssiRequest(
                 suspendCoroutine<Throwable?> { continuation ->
                     mContinuation = continuation
                     if (getBluetoothGatt(bleDevice)?.readRemoteRssi() == false) {
-                        continuation.resume(UnDefinedException("Gatt读取Rssi失败"))
+                        try {
+                            continuation.resume(UnDefinedException("Gatt读取Rssi失败"))
+                        } catch (e: Exception) {
+                            BleLogger.e(e.message)
+                        }
                     }
                 }
             },
             interrupt = { _, throwable ->
-                mContinuation?.resume(throwable)
+                try {
+                    mContinuation?.resume(throwable)
+                } catch (e: Exception) {
+                    BleLogger.e(e.message)
+                }
             },
             callback = { _, throwable ->
                 throwable?.let {
                     BleLogger.e(it.message)
                     if (it is TimeoutCancellationException || it is TimeoutCancelException) {
                         BleLogger.e("${bleDevice.deviceAddress} -> 读取Rssi超时")
-                        bleRssiCallback.callRssiFail(
+                        bleRssiCallback.callRssiFail(bleDevice,
                             TimeoutCancelException("${bleDevice.deviceAddress}" +
                                     " -> 读取Rssi失败，超时")
                         )
@@ -99,14 +104,14 @@ internal class BleRssiRequest(
             if (cancelReadRssiJob()) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     BleLogger.d("${bleDevice.deviceAddress} -> 读取Rssi成功：$rssi")
-                    it.callRssiSuccess(rssi)
+                    it.callRssiSuccess(bleDevice, rssi)
                 } else {
                     val exception = UnDefinedException(
                         "${bleDevice.deviceAddress} -> " +
                                 "读取Rssi失败，status = $status"
                     )
                     BleLogger.e(exception.message)
-                    it.callRssiFail(exception)
+                    it.callRssiFail(bleDevice, exception)
                 }
             }
         }
@@ -117,7 +122,6 @@ internal class BleRssiRequest(
     /**
      * 取消读取Rssi任务
      */
-    @Synchronized
     private fun cancelReadRssiJob(): Boolean {
         return bleTaskQueue.removeTask(getTaskId())
     }

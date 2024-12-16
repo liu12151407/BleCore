@@ -15,7 +15,7 @@ import com.bhm.ble.data.*
 import com.bhm.ble.data.Constants.READ_TASK_ID
 import com.bhm.ble.device.BleDevice
 import com.bhm.ble.request.base.BleTaskQueueRequest
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import com.bhm.ble.utils.BleUtil
 import kotlinx.coroutines.TimeoutCancellationException
 import java.util.*
@@ -38,19 +38,16 @@ internal class BleReadRequest(
     private val bleReadCallbackHashMap:
             ConcurrentHashMap<String, BleReadCallback> = ConcurrentHashMap()
 
-    @Synchronized
     private fun addReadCallback(uuid: String, bleReadCallback: BleReadCallback) {
         bleReadCallbackHashMap[uuid] = bleReadCallback
     }
 
-    @Synchronized
     fun removeReadCallback(uuid: String?) {
         if (bleReadCallbackHashMap.containsKey(uuid)) {
             bleReadCallbackHashMap.remove(uuid)
         }
     }
 
-    @Synchronized
     fun removeAllReadCallback() {
         bleReadCallbackHashMap.clear()
     }
@@ -59,13 +56,12 @@ internal class BleReadRequest(
      * read
      */
     @SuppressLint("MissingPermission")
-    @Synchronized
     fun readCharacteristic(serviceUUID: String,
                            readUUID: String,
                            bleReadCallback: BleReadCallback
     ) {
         if (!BleUtil.isPermission(getBleManager().getContext())) {
-            bleReadCallback.callReadFail(NoBlePermissionException())
+            bleReadCallback.callReadFail(bleDevice, NoBlePermissionException())
             return
         }
         val characteristic = getCharacteristic(bleDevice, serviceUUID, readUUID)
@@ -82,12 +78,20 @@ internal class BleReadRequest(
                     suspendCoroutine<Throwable?> { continuation ->
                         mContinuation = continuation
                         if (getBluetoothGatt(bleDevice)?.readCharacteristic(characteristic) == false) {
-                            continuation.resume(UnDefinedException("Gatt读特征值数据失败"))
+                            try {
+                                continuation.resume(UnDefinedException("Gatt读特征值数据失败"))
+                            } catch (e: Exception) {
+                                BleLogger.e(e.message)
+                            }
                         }
                     }
                 },
                 interrupt = { _, throwable ->
-                    mContinuation?.resume(throwable)
+                    try {
+                        mContinuation?.resume(throwable)
+                    } catch (e: Exception) {
+                        BleLogger.e(e.message)
+                    }
                 },
                 callback = { _, throwable ->
                     throwable?.let {
@@ -95,7 +99,7 @@ internal class BleReadRequest(
                         if (it is TimeoutCancellationException || it is TimeoutCancelException) {
                             val exception = TimeoutCancelException("$readUUID -> 读特征值数据失败，超时")
                             BleLogger.e(exception.message)
-                            bleReadCallback.callReadFail(exception)
+                            bleReadCallback.callReadFail(bleDevice, exception)
                         }
                     }
                 }
@@ -104,7 +108,7 @@ internal class BleReadRequest(
         } else {
             val exception = UnSupportException("$readUUID -> 读特征值数据失败，此特性不支持读特征值数据")
             BleLogger.e(exception.message)
-            bleReadCallback.callReadFail(exception)
+            bleReadCallback.callReadFail(bleDevice, exception)
         }
     }
 
@@ -124,14 +128,14 @@ internal class BleReadRequest(
                         "${it.getKey()} -> " +
                                 "读特征值数据成功：${BleUtil.bytesToHex(value)}"
                     )
-                    it.callReadSuccess(value)
+                    it.callReadSuccess(bleDevice, value)
                 } else {
                     val exception = UnDefinedException(
                         "${it.getKey()} -> " +
                                 "读特征值数据失败，status = $status"
                     )
                     BleLogger.e(exception.message)
-                    it.callReadFail(exception)
+                    it.callReadFail(bleDevice, exception)
                 }
             }
         }
@@ -142,7 +146,6 @@ internal class BleReadRequest(
     /**
      * 取消读特征值数据任务
      */
-    @Synchronized
     private fun cancelReadJob(readUUID: String?, taskId: String): Boolean {
         return getTaskQueue(readUUID?: "")?.removeTask(taskId)?: false
     }

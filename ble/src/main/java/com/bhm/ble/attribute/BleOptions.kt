@@ -21,6 +21,7 @@ import com.bhm.ble.data.Constants.DEFAULT_SCAN_RETRY_INTERVAL
 import com.bhm.ble.data.Constants.DEFAULT_OPERATE_INTERVAL
 import com.bhm.ble.data.Constants.DEFAULT_TASK_QUEUE_TYPE
 import com.bhm.ble.data.Constants.ENABLE_LOG
+import com.bhm.ble.data.Constants.STOP_SCAN_WHEN_START_CONNECT
 
 
 /**
@@ -66,6 +67,8 @@ class BleOptions private constructor(builder: Builder) {
     var autoSetMtu = builder.autoSetMtu
 
     var taskQueueType = builder.taskQueueType
+
+    var stopScanWhenStartConnect = builder.stopScanWhenStartConnect
 
     companion object {
 
@@ -114,6 +117,8 @@ class BleOptions private constructor(builder: Builder) {
 
         internal var taskQueueType: BleTaskQueueType = DEFAULT_TASK_QUEUE_TYPE
 
+        internal var stopScanWhenStartConnect = STOP_SCAN_WHEN_START_CONNECT
+
         /**
          * 设置扫描过滤规则：只查询对应ServiceUuid的设备
          */
@@ -157,6 +162,13 @@ class BleOptions private constructor(builder: Builder) {
         /**
          * 非主动断开后是否自动连接，默认为[AUTO_CONNECT]
          */
+        @Deprecated(message = "请在业务层处理自动重连，autoConnect设计的初衷是为了断开重连，利用bluetoothGatt" +
+                "的重连，但BleCore在断开连接或连接失败后，bluetoothGatt会被close掉释放资源，bluetoothGatt的重连" +
+                "不再作用，此函数将会被删除",
+            replaceWith = ReplaceWith(
+                "BleConnectCallback.onDisConnected、BleManager.connect"
+            )
+        )
         fun setAutoConnect(autoConnect: Boolean) = apply {
             this.autoConnect = autoConnect
         }
@@ -261,6 +273,14 @@ class BleOptions private constructor(builder: Builder) {
          */
         fun setTaskQueueType(taskQueueType: BleTaskQueueType) = apply {
             this.taskQueueType = taskQueueType
+        }
+
+        /**
+         * 当连接设备时是否停止扫描，默认为[STOP_SCAN_WHEN_START_CONNECT]
+         * 注意：该参数对startScanAndConnect方法无效
+         */
+        fun setStopScanWhenStartConnect(stopScanWhenStartConnect: Boolean) = apply {
+            this.stopScanWhenStartConnect = stopScanWhenStartConnect
         }
 
         fun build(): BleOptions {

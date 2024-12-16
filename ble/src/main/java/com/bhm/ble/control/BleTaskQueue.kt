@@ -12,16 +12,20 @@ import com.bhm.ble.data.Constants.CANCEL_UN_COMPLETE
 import com.bhm.ble.data.Constants.COMPLETED
 import com.bhm.ble.data.Constants.UN_COMPLETE
 import com.bhm.ble.data.TimeoutCancelException
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.ExecutorService
 
 
 /**
@@ -34,6 +38,13 @@ internal class BleTaskQueue(private val tag: String = "") {
 
     private var mCoroutineScope: CoroutineScope? = null
 
+    /*
+    * 只有一个线程的线程池，不使用CoroutineScope(Dispatchers.IO)，是因为不同设备的请求可能
+    * 使用相同的线程，从而导致一个设备的请求被阻塞，影响其他设备的请求。
+    */
+    @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
+    private val threadContext = newSingleThreadContext(tag)
+
     private val taskList = BleTaskList()
 
     init {
@@ -41,7 +52,7 @@ internal class BleTaskQueue(private val tag: String = "") {
     }
 
     private fun initLoop() {
-        mCoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        mCoroutineScope = CoroutineScope(threadContext)
     }
 
     /**
@@ -60,7 +71,7 @@ internal class BleTaskQueue(private val tag: String = "") {
             }
             task.canceled.set(true)
             taskList.remove(task)
-            BleLogger.i("($tag) 任务：${task}结束完毕，剩下${taskList.size()}个任务")
+            BleLogger.d("($tag) 任务：${task}结束完毕，剩下${taskList.size()}个任务")
             if (task.autoDoNextTask) {
                 sendTask(taskList.firstOrNull())
             }
@@ -85,7 +96,7 @@ internal class BleTaskQueue(private val tag: String = "") {
         if (mCoroutineScope == null) {
             initLoop()
         }
-        BleLogger.i("($tag) 当前任务数量：${taskList.size()}, 添加任务：$task")
+        BleLogger.d("($tag) 当前任务数量：${taskList.size()}, 添加任务：$task")
         task.setCompleted(UN_COMPLETE)
         taskList.add(task)
         taskForTiming(task)
@@ -93,6 +104,8 @@ internal class BleTaskQueue(private val tag: String = "") {
             sendTask(task)
         }
     }
+
+    fun getTaskList() = taskList
 
     /**
      * 任务的超时计时
@@ -223,5 +236,6 @@ internal class BleTaskQueue(private val tag: String = "") {
         taskList.clear()
         mCoroutineScope?.cancel()
         mCoroutineScope = null
+        (threadContext.executor as ExecutorService).shutdown()
     }
 }

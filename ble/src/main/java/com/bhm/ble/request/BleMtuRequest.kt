@@ -17,7 +17,7 @@ import com.bhm.ble.data.TimeoutCancelException
 import com.bhm.ble.data.UnDefinedException
 import com.bhm.ble.device.BleDevice
 import com.bhm.ble.request.base.Request
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import com.bhm.ble.utils.BleUtil
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlin.coroutines.Continuation
@@ -31,18 +31,17 @@ import kotlin.coroutines.suspendCoroutine
  * @author Buhuiming
  * @date 2023年06月07日 15时25分
  */
-internal class BleMtuRequest(private val bleDevice: BleDevice,
-                             private val bleTaskQueue: BleTaskQueue
+internal class BleMtuRequest(
+    private val bleDevice: BleDevice,
+    private val bleTaskQueue: BleTaskQueue
 ) : Request() {
 
     private var bleMtuChangedCallback: BleMtuChangedCallback? = null
 
-    @Synchronized
     private fun addMtuChangedCallback(callback: BleMtuChangedCallback) {
         bleMtuChangedCallback = callback
     }
 
-    @Synchronized
     fun removeMtuChangedCallback() {
         bleMtuChangedCallback = null
     }
@@ -51,10 +50,9 @@ internal class BleMtuRequest(private val bleDevice: BleDevice,
      * 设置mtu
      */
     @SuppressLint("MissingPermission")
-    @Synchronized
     fun setMtu(mtu: Int, bleMtuChangedCallback: BleMtuChangedCallback) {
         if (!BleUtil.isPermission(getBleManager().getContext())) {
-            bleMtuChangedCallback.callSetMtuFail(NoBlePermissionException())
+            bleMtuChangedCallback.callSetMtuFail(bleDevice, NoBlePermissionException())
             return
         }
         cancelSetMtuJob()
@@ -66,12 +64,20 @@ internal class BleMtuRequest(private val bleDevice: BleDevice,
                 suspendCoroutine<Throwable?> { continuation ->
                     mContinuation = continuation
                     if (getBluetoothGatt(bleDevice)?.requestMtu(mtu) == false) {
-                        continuation.resume(UnDefinedException("Gatt设置mtu失败"))
+                        try {
+                            continuation.resume(UnDefinedException("Gatt设置mtu失败"))
+                        } catch (e: Exception) {
+                            BleLogger.e(e.message)
+                        }
                     }
                 }
             },
             interrupt = { _, throwable ->
-                mContinuation?.resume(throwable)
+                try {
+                    mContinuation?.resume(throwable)
+                } catch (e: Exception) {
+                    BleLogger.e(e.message)
+                }
             },
             callback = { _, throwable ->
                 throwable?.let {
@@ -79,7 +85,7 @@ internal class BleMtuRequest(private val bleDevice: BleDevice,
                     if (it is TimeoutCancellationException || it is TimeoutCancelException) {
                         val exception = TimeoutCancelException("${bleDevice.deviceAddress} -> 设置Mtu超时")
                         BleLogger.e(exception.message)
-                        bleMtuChangedCallback.callSetMtuFail(exception)
+                        bleMtuChangedCallback.callSetMtuFail(bleDevice, exception)
                     }
                 }
             }
@@ -95,7 +101,7 @@ internal class BleMtuRequest(private val bleDevice: BleDevice,
             if (cancelSetMtuJob()) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     BleLogger.d("${bleDevice.deviceAddress} -> 设置Mtu成功：$mtu")
-                    it.callMtuChanged(mtu)
+                    it.callMtuChanged(bleDevice, mtu)
                     getBleOptions()?.mtu = mtu
                 } else {
                     val exception = UnDefinedException(
@@ -103,7 +109,7 @@ internal class BleMtuRequest(private val bleDevice: BleDevice,
                                 "设置Mtu失败，status = $status"
                     )
                     BleLogger.e(exception.message)
-                    it.callSetMtuFail(exception)
+                    it.callSetMtuFail(bleDevice, exception)
                 }
             }
         }
@@ -114,7 +120,6 @@ internal class BleMtuRequest(private val bleDevice: BleDevice,
     /**
      * 取消设置Mtu任务
      */
-    @Synchronized
     private fun cancelSetMtuJob(): Boolean {
         return bleTaskQueue.removeTask(getTaskId())
     }

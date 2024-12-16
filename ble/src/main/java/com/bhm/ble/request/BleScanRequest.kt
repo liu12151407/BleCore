@@ -17,11 +17,13 @@ import com.bhm.ble.data.Constants.DEFAULT_SCAN_MILLIS_TIMEOUT
 import com.bhm.ble.data.Constants.DEFAULT_SCAN_RETRY_INTERVAL
 import com.bhm.ble.data.UnDefinedException
 import com.bhm.ble.device.BleDevice
+import com.bhm.ble.request.base.BleRequestImp
 import com.bhm.ble.request.base.Request
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import com.bhm.ble.utils.BleUtil
 import kotlinx.coroutines.*
 import java.util.*
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 
@@ -38,7 +40,6 @@ internal class BleScanRequest private constructor() : Request() {
 
         private var instance: BleScanRequest = BleScanRequest()
 
-        @Synchronized
         fun get(): BleScanRequest {
             if (instance == null) {
                 instance = BleScanRequest()
@@ -57,28 +58,51 @@ internal class BleScanRequest private constructor() : Request() {
 
     private var bleScanCallback: BleScanCallback? = null
 
-    private val results: MutableList<BleDevice> = arrayListOf()
+    private val results: ConcurrentLinkedQueue<BleDevice> = ConcurrentLinkedQueue()
 
-    private val duplicateRemovalResults: MutableList<BleDevice> = arrayListOf()
+    private val duplicateRemovalResults: ConcurrentLinkedQueue<BleDevice> = ConcurrentLinkedQueue()
 
     private var currentReyCount = 0
+
+    private var scanMillisTimeOut: Long? = null
+
+    private var scanRetryCount: Int? = null
+
+    private var scanRetryInterval: Long? = null
 
     /**
      * 开始扫描
      */
-    @Synchronized
-    fun startScan(bleScanCallback: BleScanCallback) {
+    fun startScan(
+        scanMillisTimeOut: Long?,
+        scanRetryCount: Int?,
+        scanRetryInterval: Long?,
+        bleScanCallback: BleScanCallback
+    ) {
         if (!BleUtil.isPermission(getBleManager().getContext())) {
             bleScanCallback.callScanFail(BleScanFailType.NoBlePermission)
             return
         }
-        initScannerAndStart(bleScanCallback)
+        initScannerAndStart(
+            scanMillisTimeOut,
+            scanRetryCount,
+            scanRetryInterval,
+            bleScanCallback
+        )
     }
 
     /**
      * 初始化扫描参数
      */
-    private fun initScannerAndStart(bleScanCallback: BleScanCallback) {
+    private fun initScannerAndStart(
+        scanMillisTimeOut: Long?,
+        scanRetryCount: Int?,
+        scanRetryInterval: Long?,
+        bleScanCallback: BleScanCallback
+    ) {
+        this.scanMillisTimeOut = scanMillisTimeOut
+        this.scanRetryCount = scanRetryCount
+        this.scanRetryInterval = scanRetryInterval
         this.bleScanCallback = bleScanCallback
         val bleManager = getBleManager()
         if (!BleUtil.isPermission(bleManager.getContext()?.applicationContext)) {
@@ -164,14 +188,19 @@ internal class BleScanRequest private constructor() : Request() {
         BleLogger.d("开始第${currentReyCount + 1}次扫描")
         isScanning.set(true)
         cancelScan.set(false)
-        var scanTime = getBleOptions()?.scanMillisTimeOut?: DEFAULT_SCAN_MILLIS_TIMEOUT
+        var scanTime = scanMillisTimeOut?: (getBleOptions()?.scanMillisTimeOut?: DEFAULT_SCAN_MILLIS_TIMEOUT)
         //不支持无限扫描，可以设置scanMillisTimeOut + setScanRetryCountAndInterval
         if (scanTime <= 0) {
             scanTime = DEFAULT_SCAN_MILLIS_TIMEOUT
         }
         scanJob = bleScanCallback?.launchInIOThread {
             withTimeout(scanTime) {
-                scanner?.startScan(scanFilters, scanSetting, scanCallback)
+                try {
+                    scanner?.startScan(scanFilters, scanSetting, scanCallback)
+                } catch (e: Exception) {
+                    BleLogger.e("扫描失败： ${e.message}")
+                    bleScanCallback?.callScanFail(BleScanFailType.ScanError(-1, e))
+                }
                 delay(scanTime)
             }
         }
@@ -185,7 +214,7 @@ internal class BleScanRequest private constructor() : Request() {
      */
     private fun ifContinueScan(): Boolean {
         if (!cancelScan.get()) {
-            var retryCount = getBleOptions()?.scanRetryCount?: 0
+            var retryCount = scanRetryCount?: (getBleOptions()?.scanRetryCount?: 0)
             if (retryCount < 0) {
                 retryCount = 0
             }
@@ -204,9 +233,15 @@ internal class BleScanRequest private constructor() : Request() {
                              scanSetting: ScanSettings?,
                              throwable: Throwable?) {
         isScanning.set(false)
-        scanner?.stopScan(scanCallback)
+        try {
+            scanner?.stopScan(scanCallback)
+        } catch (e: Exception) {
+            BleLogger.e("停止扫描失败： ${e.message}")
+            bleScanCallback?.callScanFail(BleScanFailType.ScanError(-1, e))
+            return
+        }
         if (ifContinueScan()) {
-            val retryInterval = getBleOptions()?.scanRetryInterval?: DEFAULT_SCAN_RETRY_INTERVAL
+            val retryInterval = scanRetryInterval?: (getBleOptions()?.scanRetryInterval?: DEFAULT_SCAN_RETRY_INTERVAL)
             waitScanJob = bleScanCallback?.launchInDefaultThread {
                 delay(retryInterval)
                 currentReyCount ++
@@ -226,9 +261,9 @@ internal class BleScanRequest private constructor() : Request() {
                     bleScanCallback?.callScanFail(BleScanFailType.ScanError(-1, it))
                 }
             }
-            bleScanCallback?.callScanComplete(results, duplicateRemovalResults)
+            bleScanCallback?.callScanComplete(results.toMutableList(), duplicateRemovalResults.toMutableList())
             if (results.isEmpty()) {
-                BleLogger.d("没有扫描到数据")
+                BleLogger.w("没有扫描到数据")
             }
             bleScanCallback?.launchInDefaultThread {
                 delay(500)
@@ -244,23 +279,25 @@ internal class BleScanRequest private constructor() : Request() {
             if (!isScanning.get()) {
                 return
             }
-            result?.let {
-                val bleDevice = BleUtil.scanResultToBleDevice(it)
-                BleLogger.d(bleDevice.toString())
-                if ((getBleOptions()?.scanDeviceNames?.size?: 0 ) > 0) {
-                    if (!bleDevice.deviceName.isNullOrEmpty()) {
-                        getBleOptions()?.scanDeviceNames?.forEach { scanDeviceName ->
-                            if ((getBleOptions()?.containScanDeviceName == true &&
-                                        bleDevice.deviceName.uppercase()
-                                            .contains(scanDeviceName.uppercase())) ||
-                                bleDevice.deviceName.uppercase() == scanDeviceName.uppercase()
-                            ) {
-                                filterData(bleDevice)
+            BleRequestImp.get().getIOScope().launch {
+                result?.let {
+                    val bleDevice = BleUtil.scanResultToBleDevice(it)
+                    BleLogger.d(bleDevice.toString())
+                    if ((getBleOptions()?.scanDeviceNames?.size ?: 0) > 0) {
+                        if (!bleDevice.deviceName.isNullOrEmpty()) {
+                            getBleOptions()?.scanDeviceNames?.forEach { scanDeviceName ->
+                                if ((getBleOptions()?.containScanDeviceName == true &&
+                                            bleDevice.deviceName.uppercase()
+                                                .contains(scanDeviceName.uppercase())) ||
+                                    bleDevice.deviceName.uppercase() == scanDeviceName.uppercase()
+                                ) {
+                                    filterData(bleDevice)
+                                }
                             }
                         }
+                    } else {
+                        filterData(bleDevice)
                     }
-                } else {
-                    filterData(bleDevice)
                 }
             }
         }
@@ -325,7 +362,6 @@ internal class BleScanRequest private constructor() : Request() {
     /**
      * 停止扫描
      */
-    @Synchronized
     fun stopScan() {
         isScanning.set(false)
         cancelScan.set(true)

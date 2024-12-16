@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothGatt
 import android.content.Intent
 import android.os.Build
 import android.view.KeyEvent
+import android.view.View
 import android.widget.CheckBox
 import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
@@ -61,7 +62,7 @@ class DetailOperateActivity : BaseActivity<DetailViewModel, ActivityDetailBindin
 
     override fun initData() {
         super.initData()
-        AppTheme.setStatusBarColor(this, R.color.purple_500)
+        AppTheme.setStatusBarColor(this, R.color.black)
         bleDevice = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra("data", BleDevice::class.java)
         } else {
@@ -221,6 +222,14 @@ class DetailOperateActivity : BaseActivity<DetailViewModel, ActivityDetailBindin
                     content
                 )
             }
+        }
+    }
+
+    public fun showContent(view: View) {
+        if (viewBinding.llContent.visibility == View.VISIBLE) {
+            viewBinding.llContent.visibility = View.GONE
+        } else {
+            viewBinding.llContent.visibility = View.VISIBLE
         }
     }
 

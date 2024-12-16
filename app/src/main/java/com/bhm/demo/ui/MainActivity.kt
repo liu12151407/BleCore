@@ -1,5 +1,6 @@
 package com.bhm.demo.ui
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.view.View
 import android.widget.Toast
@@ -8,9 +9,11 @@ import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.bhm.ble.device.BleDevice
+import com.bhm.ble.log.BleLogger
 import com.bhm.demo.BaseActivity
 import com.bhm.demo.R
 import com.bhm.demo.adapter.DeviceListAdapter
+import com.bhm.demo.constants.LOCATION_PERMISSION
 import com.bhm.demo.databinding.ActivityMainBinding
 import com.bhm.demo.vm.MainViewModel
 import com.bhm.support.sdk.core.AppTheme
@@ -34,12 +37,13 @@ class MainActivity : BaseActivity<MainViewModel, ActivityMainBinding>() {
 
     override fun initData() {
         super.initData()
-        AppTheme.setStatusBarColor(this, R.color.purple_500)
+        AppTheme.setStatusBarColor(this, R.color.black)
         LeakCanary.runCatching {  }
         initList()
         viewModel.initBle()
     }
 
+    @SuppressLint("NotifyDataSetChanged")
     override fun initEvent() {
         super.initEvent()
         lifecycleScope.launch {
@@ -69,13 +73,17 @@ class MainActivity : BaseActivity<MainViewModel, ActivityMainBinding>() {
             viewModel.refreshStateFlow.collect {
                 delay(300)
                 dismissLoading()
-                it?.bleDevice?.let { bleDevice ->
+                if (it?.bleDevice == null) {
+                    listAdapter?.notifyDataSetChanged()
+                    return@collect
+                }
+                it.bleDevice.let { bleDevice ->
                     val position = listAdapter?.data?.indexOf(bleDevice) ?: -1
                     if (position >= 0) {
                         listAdapter?.notifyItemChanged(position)
                     }
                     val isConnected= viewModel.isConnected(bleDevice)
-                    if (it.bleDevice.deviceAddress == "7C:DF:A1:A3:5A:BE") {
+                    if (it.bleDevice.deviceAddress == viewBinding.etAddress.text.toString()) {
                         viewBinding.btnConnect.isEnabled = !isConnected
                     }
                     if (isConnected && autoOpenDetailsActivity) {
@@ -109,10 +117,28 @@ class MainActivity : BaseActivity<MainViewModel, ActivityMainBinding>() {
             if (ViewUtil.isInvalidClick(it)) {
                 return@setOnClickListener
             }
-            autoOpenDetailsActivity = true
-            showLoading("连接中...")
+            requestPermission(
+                LOCATION_PERMISSION,
+                {
+                    BleLogger.d("获取到了权限")
+                    val address = viewBinding.etAddress.text.toString()
+                    if (address.isEmpty()) {
+                        Toast.makeText(application, "请输入设备地址", Toast.LENGTH_SHORT).show()
+                        return@requestPermission
+                    }
+                    if (!Regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").matches(address)) {
+                        Toast.makeText(application, "请输入正确的设备地址", Toast.LENGTH_SHORT).show()
+                        return@requestPermission
+                    }
+                    autoOpenDetailsActivity = true
+                    showLoading("连接中...")
 //            viewModel.startScanAndConnect(this@MainActivity)
-            viewModel.connect("7C:DF:A1:A3:5A:BE")
+                    viewModel.connect(viewBinding.etAddress.text.toString())
+
+                }, {
+                    BleLogger.w("缺少定位权限")
+                }
+            )
         }
 
         viewBinding.btnSetting.setOnClickListener {

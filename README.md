@@ -2,11 +2,13 @@
 
 ## 本项目持续维护更新
 
+*   当前版本[![](https://jitpack.io/v/buhuiming/BleCore.svg)](https://jitpack.io/#buhuiming/BleCore) 
 *   minSdk 24
-*   targetSdk 33
+*   targetSdk 34
+*   compileSdk 34
 
 #### * 基于Kotlin、协程
-#### * 基于sdk 33，最新API
+#### * 基于sdk 34，最新API
 #### * 详细的完整的容错机制
 #### * 基于多个蓝牙库的设计思想
 #### * 强大的Notify\Indicate\Read\Write任务队列
@@ -39,23 +41,24 @@
             implementation 'com.github.buhuiming:BleCore:latest version'
         }
 
-#### 1、添加权限
+#### 添加权限
 
     //动态申请
-    val LOCATION_PERMISSION = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+    val LOCATION_PERMISSION = 
+        if (VERSION.SDK_INT < VERSION_CODES.S) {
             arrayOf(
+                //注册精准位置权限，否则可能Ble扫描不到设备
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION,
             )
         } else {
             arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_ADVERTISE,
-                Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
             )
         }
+*    特别注意：权限Manifest.permission.ACCESS_FINE_LOCATION，Manifest.permission.ACCESS_COARSE_LOCATION
+     在Android12及以上版本已经去掉、包括校验。权限Manifest.permission.BLUETOOTH_ADVERTISE已经去掉。
 
 *    注意：
 *    有些设备GPS是关闭状态的话，申请定位权限之后，GPS是依然关闭状态，这里要根据GPS是否打开来跳转页面
@@ -65,7 +68,7 @@
 *    跳转到系统蓝牙设置页面
      startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
 
-#### 1、初始化
+#### 初始化
     val options =
             BleOptions.builder()
                 .setScanServiceUuid("0000ff80-0000-1000-8000-00805f9b34fb", "0000ff90-0000-1000-8000-00805f9b34fb")
@@ -117,7 +120,7 @@ setTaskQueueType方法，有3个选项分别是：
 建议：以上模式主要也是针对操作之间的问题，强烈建议不要同时执行2个及以上操作，模式BleTaskQueueType.Default就是为
      了让设备所有操作同一时间只执行一个，Rssi不受影响
     
-#### 2、扫描
+#### 扫描
     注意：扫描之前先检查权限、检查GPS开关、检查蓝牙开关
     扫描及过滤过程是在工作线程中进行，所以不会影响主线程的UI操作，最终每一个回调结果都会回到主线程。
     开启扫描：
@@ -150,21 +153,25 @@ setTaskQueueType方法，有3个选项分别是：
         }
     }
 
-#### 3、停止扫描
+#### 停止扫描
     BleManager.get().stopScan()
 
-#### 4、是否扫描中
+#### 是否扫描中
     BleManager.get().isScanning()
 
-#### 5、连接
+#### 连接
     BleManager.get().connect(device)
     BleManager.get().connect(deviceAddress)
 
 *    在某些型号手机上，connectGatt必须在主线程才能有效，所以把连接过程放在主线程，回调也在主线程。
-*    为保证重连成功率，建议断开后间隔一段时间之后进行重连。
-*    
+*    为保证重连成功率，建议断开后间隔一段时间之后进行重连。（非常关键，因为断开后会有释放资源的等待时间，如果马上重连，会导致连接的资源会被释放掉，而产生错误）
+*    v1.9.0添加字段isForeConnect，主要针对某些机型，当触发连接超时回调连接失败并释放资源之后，此时外设开启触发手机系统已连接，但BleCore资源被
+     释放 (bluetoothGatt是null)，或BleCore和系统的连接状态不一致，而导致setMtu和Notify/Indicate都失败。
 
-#### 6、断开连接
+#### 停止连接
+    BleManager.get().stopConnect(device)
+
+#### 断开连接
     BleManager.get().disConnect(device)
     BleManager.get().disConnect(deviceAddress)
 
@@ -174,23 +181,23 @@ setTaskQueueType方法，有3个选项分别是：
      才会触发onDisConnected；isActiveDisConnected = false的时候，触发onDisConnecting之后大约5毫秒左右
      才会触发onDisConnected)
 
-#### 7、是否已连接
+#### 是否已连接
     BleManager.get().isConnected(bleDeviceAddress: String, simplySystemStatus: Boolean = true)
     BleManager.get().isConnected(bleDevice: BleDevice?, simplySystemStatus: Boolean = true)
 
 *    simplySystemStatus 为true，只根据系统的状态规则；为false，会根据sdk的状态，换句话说，只根据系统的状态返回。
      此字段的意义在于：有时，sdk资源被系统回收(状态未连接)，但是系统的状态是已连接。
 
-#### 8、扫描并连接，如果扫描到多个设备，则会连接第一个
+#### 扫描并连接，如果扫描到多个设备，则会连接第一个
     BleManager.get().startScanAndConnect(bleScanCallback: BleScanCallback,
                                          bleConnectCallback: BleConnectCallback)
 
 *    扫描到首个符合扫描规则的设备后，便停止扫描，然后连接该设备。
 
-#### 9、获取设备的BluetoothGatt对象
+#### 获取设备的BluetoothGatt对象
     BleManager.get().getBluetoothGatt(device)
 
-#### 10、设置Notify
+#### 设置Notify
     BleManager.get().notify(bleDevice: BleDevice,
                                   serviceUUID: String,
                                   notifyUUID: String,
@@ -209,32 +216,32 @@ BleDescriptorGetType设计原则
      因此[AllDescriptor]方式则是简单粗暴的将特征值下所有的描述符都写入数据，以保证onCharacteristicChanged函数回调，
      这个方法经过了一系列设备的验证可行，但不保证是完全有效的。
 
-#### 11、取消Notify
+#### 取消Notify
     BleManager.get().stopNotify(bleDevice: BleDevice,
                                   serviceUUID: String,
                                   notifyUUID: String,
                                   bleDescriptorGetType: BleDescriptorGetType = BleDescriptorGetType.Default)
 
-#### 12、设置Indicate
+#### 设置Indicate
     BleManager.get().indicate(bleDevice: BleDevice,
                                   serviceUUID: String,
                                   indicateUUID: String,
                                   bleDescriptorGetType: BleDescriptorGetType = BleDescriptorGetType.Default,
                                   bleIndicateCallback: BleIndicateCallback)
 
-#### 13、取消Indicate
+#### 取消Indicate
     BleManager.get().stopIndicate(bleDevice: BleDevice,
                                   serviceUUID: String,
                                   indicateUUID: String,
                                   bleDescriptorGetType: BleDescriptorGetType = BleDescriptorGetType.Default)
 
-#### 14、读取信号值
+#### 读取信号值
     BleManager.get().readRssi(bleDevice: BleDevice, bleRssiCallback: BleRssiCallback)
     
 *    获取设备的信号强度，需要在设备连接之后进行。
 *    某些设备可能无法读取Rssi，不会回调onRssiSuccess(),而会因为超时而回调onRssiFail()。
 
-#### 15、设置Mtu值
+#### 设置Mtu值
     BleManager.get().setMtu(bleDevice: BleDevice, bleMtuChangedCallback: BleMtuChangedCallback) 
 
 *    设置MTU，需要在设备连接之后进行操作。
@@ -247,18 +254,18 @@ BleDescriptorGetType设计原则
 *    建议在indicate、notify、read、write未完成的情况下，不要执行设置Mtu，否则会导致前者操作失败
 
 
-#### 16、设置连接的优先级
+#### 设置连接的优先级
     BleManager.get().setConnectionPriority(connectionPriority: Int)
 
 *    设置连接的优先级，一般用于高速传输大量数据的时候可以进行设置。
 
-#### 17、读特征值数据
+#### 读特征值数据
     BleManager.get().readData(bleDevice: BleDevice,
                               serviceUUID: String,
                               readUUID: String,
                               bleIndicateCallback: BleReadCallback)
 
-#### 18、写数据
+#### 写数据
      BleManager.get().writeData(bleDevice: BleDevice,
                                 serviceUUID: String,
                                 writeUUID: String,
@@ -282,13 +289,13 @@ BleDescriptorGetType设计原则
 
 *    一次写操作，分包后，假如某个数据包写失败，后面的数据包不会继续写，例如一次写操作分包后有10个数据包，第7个写失败，后面第8、9、10不会再写     
 
-#### 19、断开某个设备的连接 释放资源
+#### 断开某个设备的连接 释放资源
     BleManager.get().close(bleDevice: BleDevice)
 
-#### 20、断开所有连接 释放资源
+#### 断开所有连接 释放资源
     BleManager.get().closeAll()
 
-#### 21、一些移除监听的函数
+#### 一些移除监听的函数
     BleManager.get().removeBleScanCallback()
     BleManager.get().removeBleConnectCallback(bleDevice: BleDevice)
     BleManager.get().removeBleIndicateCallback(bleDevice: BleDevice, indicateUUID: String)
@@ -298,16 +305,70 @@ BleDescriptorGetType设计原则
     BleManager.get().removeBleReadCallback(bleDevice: BleDevice, readUUID: String)
     BleManager.get().removeBleWriteCallback(bleDevice: BleDevice, writeUUID: String)
 
-#### 22、v1.5.0新增addBleEventCallback方法
+#### v1.5.0新增addBleEventCallback方法
     有用户反馈，设置[connect]的bleConnectCallback、[notify]的bleNotifyCallback、
      [indicate]的bleIndicateCallback、[setMtu]的bleMtuChangedCallback之后，当其他地方需要监听这些回调时比较
     不方便，所以添加addBleEventCallback来实现。addBleEventCallback与上述回调共存
 
+#### v1.7.0新增系统蓝牙变化广播监听
+    BleManager.get().registerBluetoothStateReceiver()
+    BleManager.get().unRegisterBluetoothStateReceiver()
+
+#### v1.8.0新增stopConnect方法停止或者取消连接
+    BleManager.get().stopConnect(device)
+
+#### v2.0.0新增writeQueueData方法
+    BleManager.get().writeQueueData()，此方法支持跳过空数据包，支持写失败后重试，提高成功率。可以用于OTA升级
+
+#### 获取BleCore日志，使用自定义的日志框架打印日志或收集BleCore日志
+    通过第一步初始化时候，setEnableLog方法来决定是否使用BleCore的日志打印；
+    业务层，通过实现BleLogEvent接口，如下：
+
+    class MainActivity : BaseActivity(), BleLogEvent {
+        override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+            //添加BleCore日志监听
+            BleLogManager.get().addLogListener(this)
+        }
+
+        override fun onDestroy() {
+            super.onDestroy()
+            //移除BleCore日志监听
+            BleLogManager.get().removeLogListener(this)
+        }
+
+        /**
+         * 获取BleCore库的日志，并统一使用Logger来打印日志获取其他收集功能
+        */
+        override fun onLog(level: BleLogLevel, tag: String, message: String?) {
+            if (message.isNullOrEmpty()) {
+                return
+            }
+           when (level) {
+               is BleLogLevel.Debug ->  Logger.d(tag, message)
+               is BleLogLevel.Info ->  Logger.i(tag, message)
+               is BleLogLevel.Warn ->  Logger.w(tag, message)
+               is BleLogLevel.Error ->  Logger.e(tag, message)
+           }
+        }
+    } 
+    
+
 #### [问题锦集](https://juejin.cn/post/6844903896100372494)，但愿对你有帮助
+    https://blog.51cto.com/u_16213573/7811086
+* 1、少部分机型会存在断开连接(gatt.disconnect)后，连接状态仍未刷新，导致其他机型连接不上外设。
+  [参考](https://stackoverflow.com/questions/44521828/android-ble-gatt-disconnected-vs-device-disconnected)
 
+#### 其他
 * 1、关闭系统蓝牙，没有触发onConnectionStateChange
-       解决方案：1、操作前判断蓝牙状态，2、蓝牙广播
+  解决方案：
+  1、操作前判断蓝牙状态，
+  2、系统蓝牙变化广播监听
+     BleManager.get().registerBluetoothStateReceiver(getBluetoothCallback())
+     BleManager.get().unRegisterBluetoothStateReceiver()
 
+
+#### 考虑把Collections.synchronizedList换成其他不会导致死锁的集合
 
 ## License
 

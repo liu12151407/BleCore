@@ -7,8 +7,9 @@ package com.bhm.ble.callback
 
 import android.bluetooth.BluetoothGatt
 import com.bhm.ble.BleManager
+import com.bhm.ble.data.BleConnectFailType
 import com.bhm.ble.device.BleDevice
-import com.bhm.ble.utils.BleLogger
+import com.bhm.ble.log.BleLogger
 import kotlinx.coroutines.delay
 
 /**
@@ -20,14 +21,21 @@ import kotlinx.coroutines.delay
  */
 open class BleEventCallback : BleBaseCallback() {
 
+    private var startConnect: ((bleDevice: BleDevice) -> Unit)? = null
+
+    private var connectFail: ((bleDevice: BleDevice, connectFailType: BleConnectFailType) -> Unit)? = null
+
+    private var disConnecting: ((isActiveDisConnected: Boolean, bleDevice: BleDevice,
+                                 gatt: BluetoothGatt?, status: Int) -> Unit)? = null
+
     private var connected: ((bleDevice: BleDevice, gatt: BluetoothGatt?) -> Unit)? = null
 
     private var disConnected: ((isActiveDisConnected: Boolean, bleDevice: BleDevice,
                                 gatt: BluetoothGatt?, status: Int) -> Unit)? = null
 
-    private var characteristicChanged: ((uuid: String?, type: Int, data: ByteArray) -> Unit)? = null
+    private var characteristicChanged: ((uuid: String?, type: Int, bleDevice: BleDevice, data: ByteArray) -> Unit)? = null
 
-    private var mtuChanged: ((mtu: Int) -> Unit)? = null
+    private var mtuChanged: ((mtu: Int, bleDevice: BleDevice) -> Unit)? = null
 
     /**
      * 已连接
@@ -37,30 +45,68 @@ open class BleEventCallback : BleBaseCallback() {
     }
 
     /**
-     * 断开连接
-     * isActiveDisConnected = true 主动断开
+     * 收到数据
+     * type = 1 notify方式；type = 2 indicate方式
+     */
+    fun onCharacteristicChanged(value: ((uuid: String?, type: Int, bleDevice: BleDevice, data: ByteArray) -> Unit)) {
+        characteristicChanged = value
+    }
+
+    fun onMtuChanged(value: ((mtu: Int, bleDevice: BleDevice) -> Unit)) {
+        mtuChanged = value
+    }
+
+    /**
+     * 开始连接
+     */
+    fun onConnectStart(value: (bleDevice: BleDevice) -> Unit) {
+        startConnect = value
+    }
+
+    /**
+     * 连接失败
+     */
+    fun onConnectFail(value: (bleDevice: BleDevice, connectFailType: BleConnectFailType) -> Unit) {
+        connectFail = value
+    }
+
+    /**
+     * 触发断开，此时的设备有可能还是连接状态，未完全断开
+     */
+    fun onDisConnecting(value: (isActiveDisConnected: Boolean, bleDevice: BleDevice,
+                                gatt: BluetoothGatt?, status: Int) -> Unit) {
+        disConnecting = value
+    }
+
+    /**
+     * 连接断开，特指连接后再断开的情况。在这里可以监控设备的连接状态，一旦连接断开，可以根据自身情况考虑对BleDevice
+     * 对象进行重连操作。需要注意的是，断开和重连之间最好间隔一段时间，否则可能会出现长时间连接不上的情况。此外，
+     * 如果通过调用[com.bhm.ble.BleManager.disConnect]方法，主动断开蓝牙连接的结果也会在这个方法中回调，
+     * 此时isActiveDisConnected将会是true。
      */
     fun onDisConnected(value: (isActiveDisConnected: Boolean, bleDevice: BleDevice,
                                gatt: BluetoothGatt?, status: Int) -> Unit) {
         disConnected = value
     }
 
-    /**
-     * 收到数据
-     * type = 1 notify方式；type = 2 indicate方式
-     */
-    fun onCharacteristicChanged(value: ((uuid: String?, type: Int, data: ByteArray) -> Unit)) {
-        characteristicChanged = value
-    }
-
-    fun onMtuChanged(value: ((mtu: Int) -> Unit)) {
-        mtuChanged = value
-    }
-
-    open fun callConnected(bleDevice: BleDevice, gatt: BluetoothGatt?) {
+    open fun callConnectStart(bleDevice: BleDevice) {
         launchInMainThread {
-            connected?.invoke(bleDevice, gatt)
+            startConnect?.invoke(bleDevice)
         }
+    }
+
+    open fun callConnectFail(bleDevice: BleDevice, connectFailType: BleConnectFailType) {
+        launchInMainThread {
+            connectFail?.invoke(bleDevice, connectFailType)
+        }
+    }
+
+    open fun callDisConnecting(isActiveDisConnected: Boolean, bleDevice: BleDevice,
+                               gatt: BluetoothGatt?, status: Int) {
+        launchInMainThread {
+            disConnecting?.invoke(isActiveDisConnected, bleDevice, gatt, status)
+        }
+        callDisConnected(isActiveDisConnected, bleDevice, gatt, status)
     }
 
     open fun callDisConnected(isActiveDisConnected: Boolean, bleDevice: BleDevice,
@@ -77,16 +123,20 @@ open class BleEventCallback : BleBaseCallback() {
         }
     }
 
-    open fun callCharacteristicChanged(uuid: String?, type: Int, data: ByteArray) {
-        //数据处理如果需要在非主线程，则需要自行切换
+    open fun callConnected(bleDevice: BleDevice, gatt: BluetoothGatt?) {
         launchInMainThread {
-            characteristicChanged?.invoke(uuid, type, data)
+            connected?.invoke(bleDevice, gatt)
         }
     }
 
-    open fun callMtuChanged(mtu: Int) {
+    open fun callCharacteristicChanged(uuid: String?, type: Int, bleDevice: BleDevice, data: ByteArray) {
+        //数据处理的线程需要自行切换
+        characteristicChanged?.invoke(uuid, type, bleDevice, data)
+    }
+
+    open fun callMtuChanged(mtu: Int, bleDevice: BleDevice) {
         launchInMainThread {
-            mtuChanged?.invoke(mtu)
+            mtuChanged?.invoke(mtu, bleDevice)
         }
     }
 }

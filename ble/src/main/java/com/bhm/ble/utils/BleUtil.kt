@@ -14,6 +14,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.util.SparseArray
 import com.bhm.ble.device.BleDevice
+import com.bhm.ble.log.BleLogger
 import kotlin.math.roundToInt
 
 
@@ -57,18 +58,19 @@ object BleUtil {
      */
     fun isPermission(context: Context?): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            isPermission(context?.applicationContext,
-                Manifest.permission.ACCESS_FINE_LOCATION) &&
-            isPermission(context?.applicationContext,
-                Manifest.permission.ACCESS_COARSE_LOCATION) &&
+//            isPermission(context?.applicationContext,
+//                Manifest.permission.ACCESS_FINE_LOCATION) &&
+//            isPermission(context?.applicationContext,
+//                Manifest.permission.ACCESS_COARSE_LOCATION) &&
             isPermission(context?.applicationContext,
                 Manifest.permission.BLUETOOTH_SCAN) &&
-            isPermission(context?.applicationContext,
-                Manifest.permission.BLUETOOTH_ADVERTISE) &&
+//            isPermission(context?.applicationContext,
+//                Manifest.permission.BLUETOOTH_ADVERTISE) &&
             isPermission(context?.applicationContext,
                 Manifest.permission.BLUETOOTH_CONNECT)) {
             return true
-        } else if (isPermission(context?.applicationContext,
+        } else if (
+            isPermission(context?.applicationContext,
                 Manifest.permission.ACCESS_FINE_LOCATION) &&
             isPermission(context?.applicationContext,
                 Manifest.permission.ACCESS_COARSE_LOCATION)) {
@@ -89,6 +91,7 @@ object BleUtil {
             rssi = scanResult.rssi,
             timestampNanos = scanResult.timestampNanos,
             scanRecord = scanResult.scanRecord?.bytes,
+            serviceUuids = scanResult.scanRecord?.serviceUuids,
             tag = null
         )
     }
@@ -157,7 +160,7 @@ object BleUtil {
                         packageLength
                     )
                 }
-                BleLogger.i("${i + 1} data is: ${bytesToHex(dataPkg)}")
+                BleLogger.d("${i + 1} data is: ${bytesToHex(dataPkg)}")
                 listData.put(i, dataPkg)
             }
         } else {
